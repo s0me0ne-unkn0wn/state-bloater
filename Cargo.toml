@@ -1,0 +1,21 @@
+[package]
+name = "state-bloater"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.5.32", features = ["derive"] }
+subxt = "0.41.0"
+tokio = { version = "1.44.1", features = ["rt-multi-thread"] }
+sp-core = "31.0.0"
+env_logger = "0.11.7"
+impl-serde = { version = "0.4.0", default-features = false }
+sha3 = { version = "0.10.8", default-features = false }
+hex = "0.4"
+libsecp256k1 = { version = "0.7.1", default-features = false }
+futures = "0.3.31"
+parity-scale-codec = "3.6.9"
+sp-runtime = "32.0.0"
+log = "0.4.26"
+subxt-signer = { version = "0.41.0", features = ["unstable-eth"] }
+
