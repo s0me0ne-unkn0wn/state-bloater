@@ -182,6 +182,9 @@ where T: Pair + Send + 'static
 const BATCH_BY: usize = 100;
 use crate::mythos::api::runtime_types::mainnet_runtime::RuntimeCall;
 use crate::mythos::api::runtime_types::pallet_balances::pallet::Call as BalancesCall;
+use crate::mythos::api::runtime_types::pallet_nfts::pallet::Call as NftsCall;
+use crate::mythos::api::runtime_types::runtime_common::IncrementableU256;
+use crate::mythos::api::runtime_types::primitive_types::U256;
 use subxt_signer::ecdsa::Keypair;
 use subxt_signer::SecretUri;
 use std::str::FromStr;
@@ -197,10 +200,24 @@ use clap::Parser;
 
 #[derive(Parser, Debug)]
 // #[command(author, version, about, long_about = None)]
+#[derive(clap::ValueEnum, Clone)]
+/// The type of operation to perform.
+pub enum OperationType {
+    /// Account-related operations like transferring funds
+    Account,
+    /// NFT-related operations like minting and burning
+    Nft,
+}
+
+#[derive(Parser, Debug)]
 struct Args {
-	/// From which account to start deriving
-	#[arg(long, short, default_value_t = 0usize)]
-	from: usize,
+    /// From which account to start deriving
+    #[arg(long, short, default_value_t = 0usize)]
+    from: usize,
+
+    /// Type of operation to perform
+    #[arg(long, short, value_enum)]
+    type_: OperationType,
 }
 
 #[tokio::main]
@@ -211,37 +228,68 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args = Args::parse();
 
-	let mut send_accs: Vec<_> = derive_accounts::<ecdsa::Pair>(args.from, 3000, SENDER_SEED.to_owned());
-    // log::info!("Derived {} sender accounts", send_accs.len());
-
     let rpc_client = RpcClient::from_url("ws://127.0.0.1:9933").await?;
     let rpc = LegacyRpcMethods::<MythicalConfig>::new(rpc_client.clone());
-    // let api = subxt::OnlineClient::<MythicalConfig>::from_url("ws://127.0.0.1:9933")
-    //     .await?;
     let api = subxt::OnlineClient::<MythicalConfig>::from_rpc_client(rpc_client).await?;
 
     let signer = EthereumSigner::from(ecdsa::Pair::from_seed(&subxt_signer::eth::dev::alith().secret_key()));
 
-    for i in 0..(send_accs.len() / BATCH_BY) {
-        let nonce = rpc.system_account_next_index(&signer.account_id()).await?;
-        let params = ParamsBuilder::new().nonce(nonce).build();
-        let res = api.tx().sign_and_submit(
-            &mythos::api::tx().utility().batch(send_accs.iter().skip(i * BATCH_BY).take(BATCH_BY).map(|acc| 
-                RuntimeCall::Balances(BalancesCall::transfer_keep_alive {
-                    dest: EthereumSigner::from(acc.clone()).account_id().into(),
-                    value: 10_000_000_000_000_000,
-                }),
-            ).collect()),
-            &signer,
-            params
-        ).await;
-        if res.is_err() {
-            println!("{}", args.from + i * BATCH_BY);
-            eprintln!("Error: {:?}", res.err().unwrap());
-            return Ok(());
+    match args.type_ {
+        OperationType::Account => {
+            let send_accs: Vec<_> = derive_accounts::<ecdsa::Pair>(args.from, 3000, SENDER_SEED.to_owned());
+            
+            for i in 0..(send_accs.len() / BATCH_BY) {
+                let nonce = rpc.system_account_next_index(&signer.account_id()).await?;
+                let params = ParamsBuilder::new().nonce(nonce).build();
+                
+                let batch_calls: Vec<_> = send_accs.iter().skip(i * BATCH_BY).take(BATCH_BY).map(|acc| 
+                    RuntimeCall::Balances(BalancesCall::transfer_keep_alive {
+                        dest: EthereumSigner::from(acc.clone()).account_id().into(),
+                        value: 10_000_000_000_000_000,
+                    })
+                ).collect();
+
+                let res = api.tx().sign_and_submit(
+                    &mythos::api::tx().utility().batch(batch_calls),
+                    &signer,
+                    params
+                ).await;
+                if res.is_err() {
+                    println!("{}", args.from + i * BATCH_BY);
+                    eprintln!("Error: {:?}", res.err().unwrap());
+                    return Ok(());
+                }
+            }
+            println!("{}", args.from + send_accs.len());
+        },
+        OperationType::Nft => {
+            for i in 0..30 { // 3000/100 = 30 batches to match the account operation count
+                let nonce = rpc.system_account_next_index(&signer.account_id()).await?;
+                let params = ParamsBuilder::new().nonce(nonce).build();
+                
+                let batch_calls: Vec<_> = (0..BATCH_BY).map(|_| {
+                    RuntimeCall::Nfts(NftsCall::mint {
+                        collection: IncrementableU256(U256([0, 0, 0, 0])),
+                        maybe_item: None,
+                        mint_to: signer.account_id().into(),
+                        witness_data: None,
+                    })
+                }).collect();
+
+                let res = api.tx().sign_and_submit(
+                    &mythos::api::tx().utility().batch(batch_calls),
+                    &signer,
+                    params
+                ).await;
+                if res.is_err() {
+                    println!("{}", args.from + i * BATCH_BY);
+                    eprintln!("Error: {:?}", res.err().unwrap());
+                    return Ok(());
+                }
+            }
+            println!("{}", args.from + 3000); // Keep the same output format
         }
     }
 
-    println!("{}", args.from + send_accs.len());
     Ok(())
 }
