@@ -180,6 +180,8 @@ where T: Pair + Send + 'static
 }
 
 const BATCH_BY: usize = 100;
+const NUM_BATCHES: usize = 5;
+
 use crate::mythos::api::runtime_types::mainnet_runtime::RuntimeCall;
 use crate::mythos::api::runtime_types::pallet_balances::pallet::Call as BalancesCall;
 use crate::mythos::api::runtime_types::pallet_nfts::pallet::Call as NftsCall;
@@ -197,6 +199,7 @@ impl From<subxt_signer::eth::PublicKey> for AccountId20 {
 }
 
 use clap::Parser;
+use rand::Rng;
 
 #[derive(Parser, Debug)]
 // #[command(author, version, about, long_about = None)]
@@ -218,6 +221,21 @@ struct Args {
     /// Type of operation to perform
     #[arg(long, short, value_enum)]
     type_: OperationType,
+
+    /// Number of operations per batch
+    #[arg(long, short, default_value_t = BATCH_BY)]
+    batch_by: usize,
+
+    /// Number of batches to perform
+    #[arg(long, short, default_value_t = NUM_BATCHES)]
+    num_batches: usize,
+}
+
+fn get_random_batch_size(batch_by: usize) -> usize {
+    let mut rng = rand::thread_rng();
+    rng.gen_range(
+        (batch_by as f64 * 0.8) as usize..=(batch_by as f64 * 1.2) as usize
+    )
 }
 
 #[tokio::main]
@@ -227,6 +245,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	);
 
     let args = Args::parse();
+    let total_operations = args.batch_by * args.num_batches;
 
     let rpc_client = RpcClient::from_url("ws://127.0.0.1:9933").await?;
     let rpc = LegacyRpcMethods::<MythicalConfig>::new(rpc_client.clone());
@@ -236,18 +255,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match args.type_ {
         OperationType::Account => {
-            let send_accs: Vec<_> = derive_accounts::<ecdsa::Pair>(args.from, 3000, SENDER_SEED.to_owned());
+            let send_accs: Vec<_> = derive_accounts::<ecdsa::Pair>(args.from, total_operations, SENDER_SEED.to_owned());
+            let mut total_processed = 0;
             
-            for i in 0..(send_accs.len() / BATCH_BY) {
+            for i in 0..args.num_batches {
                 let nonce = rpc.system_account_next_index(&signer.account_id()).await?;
                 let params = ParamsBuilder::new().nonce(nonce).build();
                 
-                let batch_calls: Vec<_> = send_accs.iter().skip(i * BATCH_BY).take(BATCH_BY).map(|acc| 
-                    RuntimeCall::Balances(BalancesCall::transfer_keep_alive {
-                        dest: EthereumSigner::from(acc.clone()).account_id().into(),
-                        value: 10_000_000_000_000_000,
-                    })
-                ).collect();
+                let batch_size = get_random_batch_size(args.batch_by);
+                let batch_calls: Vec<_> = send_accs.iter()
+                    .skip(total_processed)
+                    .take(batch_size)
+                    .map(|acc| 
+                        RuntimeCall::Balances(BalancesCall::transfer_keep_alive {
+                            dest: EthereumSigner::from(acc.clone()).account_id().into(),
+                            value: 10_000_000_000_000_000,
+                        })
+                    ).collect();
 
                 let res = api.tx().sign_and_submit(
                     &mythos::api::tx().utility().batch(batch_calls),
@@ -255,19 +279,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     params
                 ).await;
                 if res.is_err() {
-                    println!("{}", args.from + i * BATCH_BY);
+                    println!("{}", args.from + total_processed);
                     eprintln!("Error: {:?}", res.err().unwrap());
                     return Ok(());
                 }
+                total_processed += batch_size;
             }
-            println!("{}", args.from + send_accs.len());
+            println!("{}", args.from + total_processed);
         },
         OperationType::Nft => {
-            for i in 0..30 { // 3000/100 = 30 batches to match the account operation count
+            let mut total_processed = 0;
+            
+            for i in 0..args.num_batches {
                 let nonce = rpc.system_account_next_index(&signer.account_id()).await?;
                 let params = ParamsBuilder::new().nonce(nonce).build();
                 
-                let batch_calls: Vec<_> = (0..BATCH_BY).map(|_| {
+                let batch_size = get_random_batch_size(args.batch_by);
+                let batch_calls: Vec<_> = (0..batch_size).map(|_| {
                     RuntimeCall::Nfts(NftsCall::mint {
                         collection: IncrementableU256(U256([0, 0, 0, 0])),
                         maybe_item: None,
@@ -282,12 +310,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     params
                 ).await;
                 if res.is_err() {
-                    println!("{}", args.from + i * BATCH_BY);
+                    println!("{}", args.from + total_processed);
                     eprintln!("Error: {:?}", res.err().unwrap());
                     return Ok(());
                 }
+                total_processed += batch_size;
             }
-            println!("{}", args.from + 3000); // Keep the same output format
+            println!("{}", args.from + total_processed);
         }
     }
 

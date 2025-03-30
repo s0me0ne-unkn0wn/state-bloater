@@ -18,4 +18,5 @@ parity-scale-codec = "3.6.9"
 sp-runtime = "32.0.0"
 log = "0.4.26"
 subxt-signer = { version = "0.41.0", features = ["unstable-eth"] }
+rand = "0.8"
 

@@ -4413,6 +4413,7 @@ dependencies = [
  "libsecp256k1",
  "log",
  "parity-scale-codec",
+ "rand",
  "sha3",
  "sp-core 31.0.0",
  "sp-runtime",
